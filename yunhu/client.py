@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any, Callable, Union
 import aiohttp
 import websockets
 
-from .api import message as message_api, user as user_api, event as event_api
+from .api import message as message_api, user as user_api
 from .models import Message, TextMessage, ImageMessage, UserInfo, Event
 from .exceptions import YunHuAuthError, YunHuAPIError, YunHuWebSocketError
 from .utils import sign_request
@@ -14,22 +14,22 @@ from .event_handler import EventHandler
 logger = logging.getLogger(__name__)
 
 class YunHuClient:
-    """云湖IM 异步客户端"""
+    """云湖IM 异步客户端（适配 token 查询参数）"""
 
     def __init__(
         self,
-        token: str = None,                     # 新增 token 参数
+        token: str = None,
         app_id: str = None,
         app_secret: str = None,
-        base_url: str = "https://api.yhchat.com/v1",
-        websocket_url: str = "wss://ws.yhchat.com/v1",
+        base_url: str = "https://chat-go.jwzhd.com/open-apis/v1",  # 默认云湖API基地址
+        websocket_url: str = None,  # 若不需要WebSocket可不传
         timeout: int = 30,
         max_retries: int = 3
     ):
         self.token = token
         self.app_id = app_id
         self.app_secret = app_secret
-        self.base_url = base_url
+        self.base_url = base_url.rstrip('/')
         self.websocket_url = websocket_url
         self.timeout = timeout
         self.max_retries = max_retries
@@ -47,7 +47,6 @@ class YunHuClient:
         await self.close()
 
     async def start(self):
-        """初始化HTTP会话"""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
@@ -55,21 +54,10 @@ class YunHuClient:
             )
 
     async def close(self):
-        """关闭连接"""
         if self._ws_client:
             await self._ws_client.close()
         if self._session and not self._session.closed:
             await self._session.close()
-
-    async def _get_auth_headers(self) -> Dict[str, str]:
-        """生成认证头"""
-        if self.token:
-            return {"Authorization": f"Bearer {self.token}"}
-        elif self.app_id and self.app_secret:
-            # 可根据实际认证方式修改，这里假设使用 Bearer token 拼接
-            return {"Authorization": f"Bearer {self.app_id}:{self.app_secret}"}
-        else:
-            raise YunHuAuthError("未提供认证信息（token 或 app_id/app_secret）")
 
     async def _request(
         self,
@@ -79,25 +67,30 @@ class YunHuClient:
         params: Optional[Dict] = None,
         retry: bool = True
     ) -> Dict[str, Any]:
-        """发送HTTP请求，自动添加认证头"""
+        """发送HTTP请求，自动将token加入查询参数"""
         url = f"{self.base_url}{endpoint}"
-        headers = await self._get_auth_headers()
-        headers["Content-Type"] = "application/json"
+        headers = {"Content-Type": "application/json"}
 
-        # 可选签名（若需要）
-        if data and self.app_secret:
-            headers["X-Sign"] = sign_request(self.app_secret, data)
+        # 合并参数：优先使用传入的params，再添加token
+        final_params = params.copy() if params else {}
+        if self.token:
+            final_params["token"] = self.token
+        elif self.app_id and self.app_secret:
+            # 备用认证：可自定义
+            headers["Authorization"] = f"Bearer {self.app_id}:{self.app_secret}"
+        else:
+            raise YunHuAuthError("未提供认证信息（token 或 app_id/app_secret）")
 
         for attempt in range(self.max_retries if retry else 1):
             try:
                 async with self._session.request(
-                    method, url, json=data, params=params, headers=headers
+                    method, url, json=data, params=final_params, headers=headers
                 ) as resp:
                     response = await resp.json()
                     if resp.status == 200:
                         return response
                     elif resp.status == 401:
-                        raise YunHuAuthError("认证失败，请检查 token 或 app_id/app_secret")
+                        raise YunHuAuthError("认证失败，请检查 token")
                     else:
                         raise YunHuAPIError(
                             f"API错误: {resp.status} - {response.get('message', '未知错误')}",
@@ -115,34 +108,46 @@ class YunHuClient:
         chat_id: str,
         message: Union[str, TextMessage, ImageMessage]
     ) -> Dict[str, Any]:
-        """发送消息"""
+        """发送消息（适配云湖 /bot/send）"""
         if isinstance(message, str):
             message = TextMessage(text=message)
-        return await message_api.send_message(self._request, chat_id, message)
+
+        endpoint = "/bot/send"
+        # 云湖要求 token 在查询参数中，已在 _request 自动添加，故 params 可不传
+        data = {
+            "chat_id": chat_id,
+            "message": message.dict(exclude_none=True)
+        }
+        return await self._request("POST", endpoint, data=data)
 
     async def recall_message(self, message_id: str) -> bool:
-        """撤回消息"""
-        return await message_api.recall_message(self._request, message_id)
+        """撤回消息（需根据实际API实现）"""
+        # 假设有 /message/recall 接口
+        endpoint = "/message/recall"
+        data = {"message_id": message_id}
+        await self._request("POST", endpoint, data=data)
+        return True
 
     # ========== 用户 API ==========
     async def get_user_info(self, user_id: str) -> UserInfo:
-        """获取用户信息"""
-        data = await user_api.get_user_info(self._request, user_id)
+        """获取用户信息（需根据实际API实现）"""
+        endpoint = f"/user/{user_id}"
+        data = await self._request("GET", endpoint)
         return UserInfo(**data)
 
     # ========== 事件 API ==========
     def on(self, event_type: str, handler: Callable[[Event], None]):
-        """注册事件处理器"""
         self._event_handler.register(event_type, handler)
 
     async def start_event_stream(self):
-        """启动WebSocket事件流"""
+        """启动WebSocket事件流（可选）"""
+        if not self.websocket_url:
+            logger.warning("未提供 websocket_url，无法启动事件流")
+            return
         if self._running:
-            logger.warning("事件流已在运行")
             return
         self._running = True
 
-        # WebSocket 认证需要根据实际情况传递 token 或 app_id
         auth_data = {}
         if self.token:
             auth_data = {"token": self.token}
@@ -161,7 +166,6 @@ class YunHuClient:
         await self._ws_client.connect()
 
     async def _on_ws_message(self, data: Dict[str, Any]):
-        """处理WebSocket接收到的消息"""
         event_type = data.get("type")
         if event_type:
             event = Event(**data)
