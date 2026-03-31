@@ -13,15 +13,13 @@ class YunHuWebSocketClient:
     def __init__(
         self,
         url: str,
-        app_id: str,
-        app_secret: str,
+        auth_data: Dict[str, Any],
         on_message: Callable[[Dict[str, Any]], None],
         on_error: Optional[Callable[[Exception], None]] = None,
         on_close: Optional[Callable[[], None]] = None
     ):
         self.url = url
-        self.app_id = app_id
-        self.app_secret = app_secret
+        self.auth_data = auth_data
         self.on_message = on_message
         self.on_error = on_error or (lambda e: None)
         self.on_close = on_close or (lambda: None)
@@ -33,12 +31,8 @@ class YunHuWebSocketClient:
         """建立连接并启动接收循环"""
         try:
             self._ws = await websockets.connect(self.url)
-            # 发送认证信息
-            auth_payload = {
-                "type": "auth",
-                "app_id": self.app_id,
-                "app_secret": self.app_secret
-            }
+            # 发送认证信息（根据实际云湖协议调整）
+            auth_payload = {"type": "auth", **self.auth_data}
             await self._ws.send(json.dumps(auth_payload))
             # 等待认证响应（简化）
             resp = await self._ws.recv()
