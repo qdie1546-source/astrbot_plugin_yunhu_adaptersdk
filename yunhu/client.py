@@ -1,43 +1,37 @@
 import logging
 import asyncio
-from typing import Optional, Dict, Any, Callable, Union
 import aiohttp
-import websockets
-
-from .models import TextMessage, ImageMessage, UserInfo, Event
+from typing import Optional, Dict, Any, Union
+from .models import TextMessage, ImageMessage
 from .exceptions import YunHuAuthError, YunHuAPIError
-from .websocket_client import YunHuWebSocketClient
-from .event_handler import EventHandler
 
 logger = logging.getLogger(__name__)
 
 class YunHuClient:
-    """云湖IM 异步客户端（适配 token 查询参数）"""
+    """云湖IM异步客户端"""
 
     def __init__(
         self,
-        token: str = None,
+        token: Optional[str] = None,
+        app_id: Optional[str] = None,
+        app_secret: Optional[str] = None,
         base_url: str = "https://chat-go.jwzhd.com/open-apis/v1",
-        websocket_url: str = None,
         timeout: int = 30,
         max_retries: int = 3
     ):
         self.token = token
+        self.app_id = app_id
+        self.app_secret = app_secret
         self.base_url = base_url.rstrip('/')
-        self.websocket_url = websocket_url
         self.timeout = timeout
         self.max_retries = max_retries
-
         self._session: Optional[aiohttp.ClientSession] = None
-        self._ws_client = None
-        self._event_handler = EventHandler()
-        self._running = False
 
     async def __aenter__(self):
         await self.start()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, *args):
         await self.close()
 
     async def start(self):
@@ -48,8 +42,6 @@ class YunHuClient:
             )
 
     async def close(self):
-        if self._ws_client:
-            await self._ws_client.close()
         if self._session and not self._session.closed:
             await self._session.close()
 
@@ -63,13 +55,17 @@ class YunHuClient:
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{endpoint}"
         headers = {"Content-Type": "application/json"}
-
-        # 将 token 加入查询参数
         final_params = params.copy() if params else {}
+
+        # 认证方式：优先使用 token，否则使用 app_id+app_secret
         if self.token:
             final_params["token"] = self.token
+        elif self.app_id and self.app_secret:
+            # 如果有 app_id+app_secret，可以按需实现签名等
+            final_params["app_id"] = self.app_id
+            final_params["app_secret"] = self.app_secret
         else:
-            raise YunHuAuthError("未提供 token")
+            raise YunHuAuthError("未提供认证信息（token 或 app_id+app_secret）")
 
         for attempt in range(self.max_retries if retry else 1):
             try:
@@ -80,7 +76,7 @@ class YunHuClient:
                     if resp.status == 200:
                         return response
                     elif resp.status == 401:
-                        raise YunHuAuthError("认证失败，请检查 token")
+                        raise YunHuAuthError("认证失败，请检查 token 或 app_id+app_secret")
                     else:
                         raise YunHuAPIError(
                             f"API错误: {resp.status} - {response.get('message', '未知错误')}",
@@ -93,24 +89,12 @@ class YunHuClient:
                 await asyncio.sleep(2 ** attempt)
 
     async def send_message(self, chat_id: str, message: Union[str, TextMessage, ImageMessage]) -> Dict[str, Any]:
-        """发送消息（适配 /bot/send）"""
+        """发送消息"""
         if isinstance(message, str):
             message = TextMessage(text=message)
-
         endpoint = "/bot/send"
         data = {
             "chat_id": chat_id,
             "message": message.dict(exclude_none=True)
         }
         return await self._request("POST", endpoint, data=data)
-
-    # 其他方法（如 get_user_info）可根据需要添加
-
-    def on(self, event_type: str, handler: Callable[[Event], None]):
-        self._event_handler.register(event_type, handler)
-
-    async def start_event_stream(self):
-        if not self.websocket_url:
-            logger.warning("未提供 websocket_url，无法启动事件流")
-            return
-        # ... 实现省略，按需添加
