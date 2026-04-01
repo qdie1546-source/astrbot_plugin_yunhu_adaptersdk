@@ -1,11 +1,14 @@
+"""云湖IM Python SDK"""
 from .client import YunHuClient
-from .models import Message, TextMessage, ImageMessage, UserInfo, Event
-from .exceptions import YunHuError, YunHuAuthError, YunHuAPIError, YunHuConnectionError, YunHuWebSocketError
+from .models import TextMessage, ImageMessage, AtMessage
+from .exceptions import YunHuError, YunHuAuthError, YunHuAPIError
 
 __all__ = [
     "YunHuClient",
-    "Message", "TextMessage", "ImageMessage",
-    "UserInfo", "Event",
-    "YunHuError", "YunHuAuthError", "YunHuAPIError",
-    "YunHuConnectionError", "YunHuWebSocketError",
+    "TextMessage",
+    "ImageMessage",
+    "AtMessage",
+    "YunHuError",
+    "YunHuAuthError",
+    "YunHuAPIError",
 ]
