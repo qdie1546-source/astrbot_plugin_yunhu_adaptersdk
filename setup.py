@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="astrbot_plugin_yunhu_adaptersdk",
-    version="2.0.0",
+    version="2.0.6",
     author="星落云",
     author_email="your-email@example.com",
     description="云湖IM Python SDK for AstrBot",
